@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+# Copyright (C) 2026 the neo_ee_next contributors
+# SPDX-License-Identifier: GPL-3.0-only
+"""Minimal gh stand-in for public GitHub release downloads (no login).
+
+Supports the calls empire_earth_next tools/fetch_data.py makes:
+  gh release list --limit N --json tagName,publishedAt -R owner/repo
+  gh release view TAG --json assets -R owner/repo
+  gh release download TAG --pattern NAME --dir DIR --clobber -R owner/repo
+"""
+import json
+import os
+import sys
+import urllib.request
+
+API = "https://api.github.com"
+
+
+def die(msg, code=1):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def api(url):
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "neo-ee-next",
+    })
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(req) as resp:
+        return json.load(resp)
+
+
+def take(argv, flag):
+    if flag not in argv:
+        return None
+    i = argv.index(flag)
+    if i + 1 >= len(argv):
+        die(f"missing value for {flag}")
+    val = argv[i + 1]
+    del argv[i:i + 2]
+    return val
+
+
+def repo_of(argv):
+    repo = take(argv, "-R") or take(argv, "--repo")
+    if not repo:
+        die("missing -R owner/repo")
+    return repo
+
+
+def releases(repo, limit):
+    out = []
+    page = 1
+    while len(out) < limit:
+        batch = api(f"{API}/repos/{repo}/releases?per_page=100&page={page}")
+        if not isinstance(batch, list) or not batch:
+            break
+        out.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return out[:limit]
+
+
+def cmd_list(argv):
+    repo = repo_of(argv)
+    limit = int(take(argv, "--limit") or "30")
+    fields = [f for f in (take(argv, "--json") or "").split(",") if f]
+    rows = []
+    for rel in releases(repo, limit):
+        item = {}
+        if not fields or "tagName" in fields:
+            item["tagName"] = rel.get("tag_name")
+        if not fields or "publishedAt" in fields:
+            item["publishedAt"] = rel.get("published_at")
+        rows.append(item)
+    json.dump(rows, sys.stdout)
+    sys.stdout.write("\n")
+
+
+def find_release(repo, tag):
+    try:
+        return api(f"{API}/repos/{repo}/releases/tags/{tag}")
+    except Exception:
+        for rel in releases(repo, 200):
+            if rel.get("tag_name") == tag:
+                return rel
+        die(f"release {tag} not found")
+
+
+def cmd_view(argv):
+    if not argv:
+        die("missing tag")
+    tag = argv.pop(0)
+    repo = repo_of(argv)
+    take(argv, "--json")
+    rel = find_release(repo, tag)
+    assets = [{
+        "name": a.get("name"),
+        "size": a.get("size"),
+        "url": a.get("browser_download_url"),
+        "contentType": a.get("content_type"),
+        "downloadCount": a.get("download_count"),
+    } for a in rel.get("assets", [])]
+    json.dump({"assets": assets}, sys.stdout)
+    sys.stdout.write("\n")
+
+
+def cmd_download(argv):
+    if not argv:
+        die("missing tag")
+    tag = argv.pop(0)
+    repo = repo_of(argv)
+    pattern = take(argv, "--pattern")
+    dest = take(argv, "--dir") or "."
+    if "--clobber" in argv:
+        argv.remove("--clobber")
+    rel = find_release(repo, tag)
+    assets = rel.get("assets", [])
+    if pattern:
+        assets = [a for a in assets if a.get("name") == pattern]
+    if len(assets) != 1:
+        die(f"expected one asset, found {[a.get('name') for a in assets]}")
+    asset = assets[0]
+    os.makedirs(dest, exist_ok=True)
+    path = os.path.join(dest, asset["name"])
+    url = asset["browser_download_url"]
+    print(f"downloading {url}", file=sys.stderr)
+    urllib.request.urlretrieve(url, path + ".part")
+    os.replace(path + ".part", path)
+
+
+def main():
+    argv = sys.argv[1:]
+    if len(argv) >= 2 and argv[0] == "release" and argv[1] == "list":
+        cmd_list(argv[2:])
+    elif len(argv) >= 2 and argv[0] == "release" and argv[1] == "view":
+        cmd_view(argv[2:])
+    elif len(argv) >= 2 and argv[0] == "release" and argv[1] == "download":
+        cmd_download(argv[2:])
+    else:
+        die("unsupported gh invocation: " + " ".join(argv))
+
+
+if __name__ == "__main__":
+    main()

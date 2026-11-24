@@ -1,0 +1,15 @@
+# Extracted retail or NeoEE trees, installers, and build output.
+# This repository tracks the notes and patches/, not the game.
+/extract/
+/work/
+/vendor-game/
+/build/
+__pycache__/
+*.pyc
+*.exe
+*.dll
+*.ssa
+*.dat
+*.zip
+*.7z
+*.iso
