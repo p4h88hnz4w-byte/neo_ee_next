@@ -121,6 +121,14 @@ byte-identical. Those scripts are not in this repository. Copy them from a
 NeoEE install of the same patch. Fourteen of the added scripts are signed
 "By Kazter". Eight are signed "RealForce/Cobra".
 
+NeoEE also replaces one title-screen tile, `Data/Textures/bkg_title_1_4`.
+On the retail screen that tile is sky at the top right. The NeoEE tile
+paints "NeoEE Edition" on it. The installer ships that tile as a 256×256
+TGA. The setup script writes the PNG this build loads, and a 4× copy when
+`Data/Textures-4x` is present. Texture resolution 4 would otherwise keep
+the retail tile from that pack. The image stays in the NeoEE install and
+is not part of the network checksum.
+
 After the patch, build and play the way `empire_earth_next` documents.
 `tools/make_play_dir.py` can assemble a play folder. Set `EE_DATA_ROOT` to
 that folder. Optional 4x textures go in `Data/Textures-4x` with

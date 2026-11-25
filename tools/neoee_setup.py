@@ -13,7 +13,7 @@ What it does, in order, skipping a step that is already done:
 
   1. Apply patches/neoee-on-ee-next.patch to the empire_earth_next checkout.
      The patch is NeoEE table data only. It does not contain that project's source.
-  2. Copy random-map scripts from an extracted NeoEE Art of Conquest tree.
+  2. Copy random-map scripts, and the title tile, from an extracted NeoEE tree.
   3. Fetch the pinned media and 4x textures when data/ does not already have them.
   4. Build the game for this machine (xbuild.py on Linux and macOS, build.py on Windows).
   5. With --play, make a play folder, or refresh one that already exists.
@@ -25,7 +25,7 @@ Defaults look beside this repository:
   ../empire-earth-gold/Empire Earth - The Art of Conquest/Data/Movies
 
 --neoee and --movies may instead be the directory innoextract wrote. The
-script finds the Art of Conquest movies and random-map scripts inside it.
+script finds the Art of Conquest movies, random-map scripts, and title tile inside it.
 A missing default is skipped. An existing play folder is not deleted.
 --force-play replaces one that tools/make_play_dir.py created, which removes
 its config and saves.
@@ -37,12 +37,15 @@ without a login, this script puts tools/bin/gh first on PATH for that step.
 
 import argparse
 import json
+import math
 import os
 import pathlib
 import platform
 import shutil
+import struct
 import subprocess
 import sys
+import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PATCH = ROOT / "patches" / "neoee-on-ee-next.patch"
@@ -230,6 +233,164 @@ def install_maps(game, neoee, dry_run):
     print(f"maps: {copied} {verb}, {unchanged} already matched, from {source}")
 
 
+def read_tga_rgb(path):
+    """Uncompressed 24- or 32-bit TGA as top-down RGB bytes. NeoEE's title tile is 24-bit."""
+    data = path.read_bytes()
+    if len(data) < 18 or data[1] != 0 or data[2] != 2 or data[16] not in (24, 32):
+        sys.exit(f"title: {path} is not an uncompressed true-color TGA")
+    width, height = struct.unpack_from("<HH", data, 12)
+    bpp = data[16] // 8
+    start = 18 + data[0]
+    need = width * height * bpp
+    pixels = data[start:start + need]
+    if len(pixels) != need:
+        sys.exit(f"title: {path} is shorter than its header claims")
+    rows = []
+    for y in range(height):
+        row = bytearray()
+        base = y * width * bpp
+        for x in range(width):
+            i = base + x * bpp
+            row += bytes((pixels[i + 2], pixels[i + 1], pixels[i]))
+        rows.append(row)
+    if (data[17] & 0x20) == 0:
+        rows.reverse()
+    return width, height, b"".join(rows)
+
+
+def write_png(path, width, height, rgb):
+    """Write an 8-bit RGB PNG. The game loads this in place of the TGA."""
+    def chunk(tag, payload):
+        return (struct.pack(">I", len(payload)) + tag + payload
+                + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    raw = bytearray()
+    stride = width * 3
+    for y in range(height):
+        raw.append(0)
+        raw += rgb[y * stride:(y + 1) * stride]
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+           + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(png)
+    os.replace(tmp, path)
+
+
+def _lanczos(x, radius):
+    ax = abs(x)
+    if ax >= radius:
+        return 0.0
+    if ax < 1e-6:
+        return 1.0
+    pix = math.pi * x
+    return radius * math.sin(pix) * math.sin(pix / radius) / (pix * pix)
+
+
+def scale_lanczos(rgb, sw, sh, dw, dh, radius=3):
+    """4x the title tile so the texture pack does not keep the retail sky."""
+    xscale = sw / dw
+    wide = bytearray(dw * sh * 3)
+    for y in range(sh):
+        row = y * sw * 3
+        for x in range(dw):
+            cx = (x + 0.5) * xscale - 0.5
+            start = math.floor(cx) - radius + 1
+            acc = [0.0, 0.0, 0.0]
+            weight = 0.0
+            for i in range(start, start + radius * 2):
+                w = _lanczos(cx - i, radius)
+                if w == 0.0:
+                    continue
+                sample = row + min(max(i, 0), sw - 1) * 3
+                acc[0] += rgb[sample] * w
+                acc[1] += rgb[sample + 1] * w
+                acc[2] += rgb[sample + 2] * w
+                weight += w
+            out = (y * dw + x) * 3
+            for c in range(3):
+                value = int(round(acc[c] / weight)) if weight else 0
+                wide[out + c] = 0 if value < 0 else 255 if value > 255 else value
+    yscale = sh / dh
+    tall = bytearray(dw * dh * 3)
+    for y in range(dh):
+        cy = (y + 0.5) * yscale - 0.5
+        start = math.floor(cy) - radius + 1
+        for x in range(dw):
+            acc = [0.0, 0.0, 0.0]
+            weight = 0.0
+            for i in range(start, start + radius * 2):
+                w = _lanczos(cy - i, radius)
+                if w == 0.0:
+                    continue
+                sample = (min(max(i, 0), sh - 1) * dw + x) * 3
+                acc[0] += wide[sample] * w
+                acc[1] += wide[sample + 1] * w
+                acc[2] += wide[sample + 2] * w
+                weight += w
+            out = (y * dw + x) * 3
+            for c in range(3):
+                value = int(round(acc[c] / weight)) if weight else 0
+                tall[out + c] = 0 if value < 0 else 255 if value > 255 else value
+    return tall
+
+
+def place_png(path, width, height, rgb, dry_run):
+    """Write path when its bytes would change. Returns True when it wrote or would write."""
+    if dry_run:
+        print("title: would write", path)
+        return True
+    blob_path = path.with_name(path.name + ".new")
+    write_png(blob_path, width, height, rgb)
+    if path.is_file() and path.read_bytes() == blob_path.read_bytes():
+        blob_path.unlink()
+        return False
+    os.replace(blob_path, path)
+    return True
+
+
+def install_title(game, neoee, dry_run):
+    """NeoEE replaces textures/bkg_title_1_4, the top-right sky tile, with 'NeoEE Edition'."""
+    if neoee is None:
+        print("title: no NeoEE tree found; the menu tile stays the retail sky")
+        return
+    textures = find_named(neoee, "Textures", ".tga")
+    tga = textures / "bkg_title_1_4.tga" if textures is not None else None
+    if tga is None or not tga.is_file():
+        print("title: bkg_title_1_4.tga was not in the NeoEE tree; the menu tile stays retail")
+        return
+    one = game / "data" / "Textures" / "bkg_title_1_4.png"
+    pack = game / "data" / "Textures-4x" / "bkg_title_1_4.png"
+    if dry_run:
+        print("title: would write", one)
+        if pack.parent.is_dir():
+            print("title: would write", pack, "(4x)")
+        return
+    width, height, rgb = read_tga_rgb(tga)
+    wrote = place_png(one, width, height, rgb, False)
+    if pack.parent.is_dir():
+        scaled = scale_lanczos(rgb, width, height, width * 4, height * 4)
+        if place_png(pack, width * 4, height * 4, scaled, False):
+            wrote = True
+    print("title:", "updated" if wrote else "already matched", tga)
+
+
+def copy_title_to_play(game, play, dry_run):
+    """The 1x play folder keeps its own Textures copy. Textures-4x is usually a link."""
+    for folder in ("Textures", "Textures-4x"):
+        src = game / "data" / folder / "bkg_title_1_4.png"
+        dst = play / "Data" / folder / "bkg_title_1_4.png"
+        if not src.is_file() or dst.is_symlink():
+            continue
+        if dry_run:
+            print("  title", dst)
+        elif replace_file(src, dst):
+            print("  title updated", dst.name, "in", folder)
+        else:
+            print("  title already matched in", folder)
+
+
 def media_ready(game, textures):
     manifest = game / "data" / ".fetched.json"
     root = game / "build" / "data-root" / "Data"
@@ -377,6 +538,7 @@ def refresh_play(game, play, dry_run):
         unchanged += u
     verb = "would update" if dry_run else "updated"
     print(f"  tables: {copied} {verb}, {unchanged} already matched")
+    copy_title_to_play(game, play, dry_run)
     map_src = game / "data" / "Random Map Scripts"
     if map_src.is_dir():
         c, u = copy_tree_files(map_src, play / "Data" / "Random Map Scripts", ".rmv", dry_run)
@@ -473,6 +635,7 @@ def main():
     apply_patch(game, args.dry_run)
     if not args.no_maps:
         install_maps(game, neoee, args.dry_run)
+        install_title(game, neoee, args.dry_run)
     fetch_media(game, not args.no_textures_4x, not args.no_fetch, args.dry_run)
     if not args.no_build:
         build_game(game, args.jobs, args.dry_run)

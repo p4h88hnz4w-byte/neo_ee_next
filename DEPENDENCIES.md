@@ -60,8 +60,8 @@ game is a pull request there, not a copy of its source in this repository.
 ## NeoEE, only when re-extracting
 
 The patch file already contains the table changes. A NeoEE installer is
-needed only to copy the 115 extra random-map scripts, or to regenerate the
-tables.
+needed only to copy the 115 extra random-map scripts, to copy the
+`bkg_title_1_4` title tile, or to regenerate the tables.
 
 The install this patch was taken from is the community NeoEE setup. Its
 base-game version file (`Empire Earth/zzWONVersion.cfg`) reads `2.0.0.5`.
