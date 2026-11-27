@@ -7,6 +7,8 @@ below. Versions are the ones this tree was built and played with.
 python3 -I tools/neoee_setup.py --play ../EE-play
 ```
 
+On macOS, use Homebrew's Python 3.12 (`python3.12 -I`). See the macOS section.
+
 ## Game
 
 A legal copy of *Empire Earth Gold* (*Empire Earth* and *The Art of
@@ -24,20 +26,20 @@ with ffmpeg (`tools/convert_movies.py` or `tools/make_play_dir.py --movies`).
 
 Commit `7cc02da3aa036e7f87a6e7602a366adc2c086882`.
 
-Build requirements, from that project's README and
-`.github/workflows/posix.yml`:
+Shared build requirements, from that project's README:
 
-- Python 3.12, standard library only (`python3 -I`)
-- clang and lld
-- CMake and Ninja
-- pkg-config
-- SDL3's X11 and Wayland development packages: libx11, libxext, libxrandr,
-  libxcursor, libxi, libxss, libxfixes, libxtst, libxkbcommon, libwayland,
-  wayland-protocols, libegl, libgl, libdbus, libibus, libdecor
-- A Vulkan adapter to play. Mesa RADV is enough on AMD. Headless smoke tests
-  can use lavapipe (`mesa-vulkan-drivers`).
+- Python 3.12, standard library only (`python3 -I` on Linux, `python3.12 -I` on macOS)
+- clang, CMake, and Ninja
+- ffmpeg, when converting intro movies
+- innoextract, when unpacking the GOG and NeoEE installers
 
-Fetch and build from that checkout:
+Linux also needs lld, pkg-config, SDL3's X11 and Wayland development
+packages, and a Vulkan adapter. Those package names are in the Debian
+section. macOS uses the Command Line Tools SDK, Apple's linker, and Metal.
+Those package names are in the macOS section. `tools/neoee_setup.py` runs
+the fetch and the build.
+
+Fetch and build from that checkout, when doing it by hand:
 
 ```
 python3 -I tools/fetch_posix.py wgpu sdl3 fonts
@@ -93,6 +95,48 @@ sudo apt-get install -y --no-install-recommends \
 Mesa's Vulkan driver is enough to play on AMD. The `gh` package is not
 required. Arch and Omarchy use different package names and are not part of
 this version.
+
+## macOS
+
+Apple Silicon (`macos-arm64`) and Intel (`macos-x86_64`). The setup script
+picks the target from the machine. `empire_earth_next`'s `tools/xbuild.py`
+sets the deployment target to macOS 11.0 on Apple Silicon and macOS 10.15
+on Intel. Install Command Line Tools, then Homebrew's packages:
+
+```
+xcode-select --install
+brew install cmake ninja python@3.12 ffmpeg innoextract git
+```
+
+Homebrew's prefix is `/opt/homebrew` on Apple Silicon and `/usr/local` on
+Intel. Add `"$(brew --prefix)/bin"` to `PATH` so the build finds
+`python3.12`, `cmake`, and `ninja`.
+
+clang and the SDK come from Command Line Tools (`xcrun --show-sdk-path`).
+`tools/fetch_posix.py` downloads wgpu-native for `macos-aarch64` or
+`macos-x86_64`, and the SDL3 sources. `tools/xbuild.py` builds SDL3 as a
+static library and links it with Cocoa, Metal, and the other Apple
+frameworks. The game draws with that Metal device. Linux's `lld`,
+`pkg-config`, X11, Wayland, and Vulkan packages are not part of this build.
+
+`innoextract` unpacks both installers. `ffmpeg` converts the intro movies.
+The compile reads neither installer. Tables come from this repository's
+patch, and models, textures, sounds, and music come from the pinned
+`empire_earth_next` releases. The GOG tree supplies `.bik` movies. The
+NeoEE tree supplies the 115 extra random-map scripts and the title tile.
+
+The `gh` package is not required. `tools/bin/gh` is a Python script. The
+setup script puts it first on `PATH` when the GitHub CLI is missing or
+cannot read a public release without a login. A token is optional.
+
+The setup script completed on an Apple Silicon Mac running macOS 26, with
+Command Line Tools and Homebrew's Python 3.12, CMake, and Ninja. It
+compiled `macos-arm64`, fetched both pinned releases, and wrote a play
+folder. A finished game is not recorded here. The Intel packages are the
+same names. That target was not built on the Apple Silicon machine. The
+setup script passes `--incremental` to `xbuild.py`. A header-only change
+needs `python3.12 -I tools/xbuild.py game -j 8` from the game checkout,
+without `--incremental`, and then another setup run to refresh `ee-aoc`.
 
 ## Not required
 
